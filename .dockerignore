@@ -5,3 +5,4 @@ node_modules
 work
 tests
 *.log
+scripts

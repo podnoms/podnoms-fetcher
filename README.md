@@ -51,6 +51,8 @@ bun run typecheck
 
 The image is published to `ghcr.io/podnoms/podnoms-fetcher` (`latest`, and the version) by the GitHub Actions workflow when a `v*` tag is pushed, after the tests pass.
 
+To publish from your own machine instead, `scripts/build-docker.sh` builds the current checkout and pushes it as `latest` (or the tag given), without the tests; `--dry-run` shows what it would do. It needs `docker login ghcr.io` with a token that has `write:packages`.
+
 To deploy, use [compose.example.yml](compose.example.yml). It runs gluetun with the fetcher sharing its network, so all the fetcher's traffic goes through the VPN, and publishes the fetcher's port on gluetun. Choose a wide `SERVER_COUNTRIES` list so each reconnect is likely to land on a new IP. PodNoms must be able to reach the port, for example over Tailscale. Then set this in PodNoms:
 
 ```
