@@ -21,7 +21,7 @@ Jobs answer with newline-delimited JSON. First comes a `{ "line": "…" }` for e
 - `{ "file": { "id", "ext" } }`: the download finished; collect it from `/files/:id`.
 - `{ "error", "rateLimited" }`: the job failed. `rateLimited` is true when the platform still refused after the IP changes.
 
-Requests never carry yt-dlp arguments. The fetcher builds the same arguments PodNoms uses for local runs (`src/ytdlp.ts`), so they print the same lines.
+Requests never carry yt-dlp arguments. The fetcher builds the same arguments PodNoms uses for local runs (`src/YtDlp.cs`), so they print the same lines.
 
 ## Configuration
 
@@ -42,11 +42,11 @@ Requests never carry yt-dlp arguments. The fetcher builds the same arguments Pod
 
 ## Running it
 
+It's an ASP.NET Core app, and needs the .NET 11 SDK.
+
 ```sh
-bun install
-FETCHER_SECRET=… bun run dev      # http://localhost:8080
-bun run test
-bun run typecheck
+FETCHER_SECRET=… dotnet watch --project src      # http://localhost:8080
+dotnet test
 ```
 
 The image is published to `ghcr.io/podnoms/podnoms-fetcher` (`latest`, and the version) by the GitHub Actions workflow when a `v*` tag is pushed, after the tests pass.
