@@ -1,0 +1,9 @@
+<Solution>
+  <Project Path="src/podnoms-fetcher.csproj" />
+  <Folder Name="/tests/">
+    <Project Path="tests/fake-pip/fake-pip.csproj" />
+    <Project Path="tests/fake-vpn/fake-vpn.csproj" />
+    <Project Path="tests/fake-yt-dlp/fake-yt-dlp.csproj" />
+    <Project Path="tests/podnoms-fetcher.tests/podnoms-fetcher.tests.csproj" />
+  </Folder>
+</Solution>

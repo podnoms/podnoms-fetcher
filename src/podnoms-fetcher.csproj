@@ -1,0 +1,22 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net11.0</TargetFramework>
+    <RootNamespace>PodNoms.Fetcher</RootNamespace>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <Version>0.2.0</Version>
+    <!-- Published as a native binary: no .NET runtime in the image. -->
+    <PublishAot>true</PublishAot>
+    <!-- Not a globalised app; saves ICU in the image. -->
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Written by scripts/update-protonvpn-servers.sh. -->
+    <EmbeddedResource Include="ProtonVpnServers.json" LogicalName="ProtonVpnServers.json" />
+  </ItemGroup>
+
+</Project>

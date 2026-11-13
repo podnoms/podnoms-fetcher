@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   test:
-    name: Type-check and test
+    name: Build and test
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -25,21 +25,16 @@ jobs:
         with:
           persist-credentials: false
 
-      # The same Bun as the Dockerfile's image. The tests' fake yt-dlp and pip
-      # run on the runner's Node.
-      - name: Install Bun
+      # The same .NET as the Dockerfile's images.
+      - name: Install .NET
         run: |
-          curl -fsSL https://bun.sh/install | bash -s "bun-v1.4.1"
-          echo "$HOME/.bun/bin" >> "$GITHUB_PATH"
+          curl -fsSL https://dot.net/v1/dotnet-install.sh | bash -s -- --channel 11.0
+          echo "$HOME/.dotnet" >> "$GITHUB_PATH"
+          echo "DOTNET_ROOT=$HOME/.dotnet" >> "$GITHUB_ENV"
 
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Type-check
-        run: bun run typecheck
-
+      # Warnings are errors, so this is the type-check too.
       - name: Test
-        run: bun run test
+        run: dotnet test
 
   publish:
     name: Build and publish to GHCR

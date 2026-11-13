@@ -1,40 +1,27 @@
-# An example: the fetcher behind a gluetun VPN, on the remote host. The
-# fetcher shares gluetun's network, so everything it sends to YouTube goes
-# out through the VPN, and its port is published on gluetun.
+# An example: the fetcher on the remote host, running its own WireGuard VPN.
+# Everything it sends to YouTube goes out through the VPN, and nothing goes out
+# at all if the VPN is down.
 #
 # PodNoms needs to reach port 8080 on this host (e.g. over Tailscale); only
 # the VPN's exit IP is seen by the platforms.
 services:
-  gluetun:
-    image: qmcgaw/gluetun:v3
-    cap_add:
-      - NET_ADMIN
-    devices:
-      - /dev/net/tun:/dev/net/tun
-    environment:
-      # Your provider's settings: see https://github.com/qdm12/gluetun-wiki
-      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER}
-      VPN_TYPE: wireguard
-      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY}
-      # A wide choice of servers, so each reconnect is likely a new IP.
-      SERVER_COUNTRIES: ${SERVER_COUNTRIES:-Netherlands,Germany,Belgium,France,Ireland}
-      # The control server the fetcher asks to reconnect. Make a key with
-      # `docker run --rm qmcgaw/gluetun genkey`.
-      HTTP_CONTROL_SERVER_ADDRESS: ':8000'
-      HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE: '{"auth":"apikey","apikey":"${GLUETUN_API_KEY}"}'
-      # Lets PodNoms in to the fetcher through gluetun's firewall.
-      FIREWALL_INPUT_PORTS: '8080'
-    ports:
-      - '8080:8080'
-    restart: unless-stopped
-
   fetcher:
     image: ghcr.io/podnoms/podnoms-fetcher:latest
-    network_mode: service:gluetun
-    depends_on:
-      - gluetun
+    # To make the WireGuard interface, its routes and the firewall. The host's
+    # kernel needs WireGuard (Linux 5.6 or later).
+    cap_add:
+      - NET_ADMIN
+    sysctls:
+      net.ipv4.conf.all.src_valid_mark: 1
     environment:
       FETCHER_SECRET: ${FETCHER_SECRET}
-      GLUETUN_CONTROL_URL: http://localhost:8000
-      GLUETUN_API_KEY: ${GLUETUN_API_KEY}
+      # Proton VPN: the PrivateKey from any WireGuard config made at
+      # account.protonvpn.com (one key works on every server). See the README
+      # for Mullvad, and for any other provider (a folder of its configs).
+      VPN_PROVIDER: protonvpn
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY}
+      # Near the host is far faster. Each server is another IP to move to.
+      SERVER_COUNTRIES: ${SERVER_COUNTRIES:-Netherlands,Germany,Belgium,France,Switzerland}
+    ports:
+      - '8080:8080'
     restart: unless-stopped

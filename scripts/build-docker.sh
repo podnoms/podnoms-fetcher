@@ -6,7 +6,7 @@ usage() {
 Usage: scripts/build-docker.sh [TAG] [--dry-run]
 
 Build the current checkout and push it directly, without the GitHub Actions
-workflow's type-check and tests. TAG defaults to latest. A custom tag is
+workflow's tests. TAG defaults to latest. A custom tag is
 pushed on its own, without updating latest.
 
 Environment:
@@ -56,7 +56,7 @@ build=(docker buildx build
   "$repo_root")
 
 printf 'Image: %s\nPlatform: %s\nContext: %s\n' "$image" "$platform" "$repo_root"
-echo 'Builds local changes allowed by .dockerignore; skips type-checks and tests.'
+echo 'Builds local changes allowed by .dockerignore; skips the tests.'
 if "$dry_run"; then
   printf 'Would run:'
   printf ' %q' "${build[@]}"
