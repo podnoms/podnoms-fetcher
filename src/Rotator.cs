@@ -1,16 +1,12 @@
-﻿using System.Net.Http.Headers;
-using System.Text.Json;
-
-namespace PodNoms.Fetcher;
+﻿namespace PodNoms.Fetcher;
 
 /// <summary>
-/// Changes our public IP by having gluetun reconnect, which picks a new
-/// server from its configured list. Only one rotation happens at a time, and
-/// each one is numbered (its generation): a job refused on an IP we've since
-/// moved off just tries again, rather than asking for another rotation.
+/// Changes our public IP by moving the VPN to another server. Only one
+/// rotation happens at a time, and each one is numbered (its generation): a
+/// job refused on an IP we've since moved off just tries again, rather than
+/// asking for another rotation.
 /// </summary>
-public sealed class Rotator(FetcherOptions options, ILogger<Rotator> logger) : IDisposable {
-  private readonly HttpClient _http = new() { Timeout = TimeSpan.FromSeconds(15) };
+public sealed class Rotator(FetcherOptions options, Vpn vpn, ILogger<Rotator> logger) {
   private readonly Lock _state = new();
   private int _generation;
   private DateTimeOffset _lastRotatedAt = DateTimeOffset.MinValue;
@@ -22,46 +18,22 @@ public sealed class Rotator(FetcherOptions options, ILogger<Rotator> logger) : I
     }
   }
 
-  private async Task<HttpResponseMessage> GluetunAsync(HttpMethod method, string path, string? json = null) {
-    var (url, apiKey) = options.Gluetun!;
-    using var request = new HttpRequestMessage(method, url + path);
-    if (apiKey is not null) request.Headers.Add("X-API-Key", apiKey);
-    if (json is not null) request.Content = new StringContent(json, new MediaTypeHeaderValue("application/json"));
-    var response = await _http.SendAsync(request);
-    if (response.IsSuccessStatusCode) return response;
-    response.Dispose();
-    throw new HttpRequestException($"gluetun answered {(int)response.StatusCode} to {method} {path}");
-  }
-
-  /// <summary>Our public IP as gluetun sees it, or null if it isn't known (yet).</summary>
-  public async Task<string?> PublicIpAsync() {
-    if (options.Gluetun is null) return null;
-    try {
-      using var response = await GluetunAsync(HttpMethod.Get, "/v1/publicip/ip");
-      using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-      return body.RootElement.TryGetProperty("public_ip", out var ip) && ip.GetString() is { Length: > 0 } value ? value : null;
-    } catch {
-      return null;
-    }
-  }
-
-  private async Task SetStatusAsync(string status) {
-    using var response = await GluetunAsync(HttpMethod.Put, "/v1/vpn/status", $$"""{"status":"{{status}}"}""");
-  }
-
+  // Tries the servers we've been off longest until one gives us an IP other
+  // than the one refused, for as long as ROTATE_TIMEOUT_SECONDS allows.
   private async Task<bool> ReconnectAsync() {
-    var before = await PublicIpAsync();
-    await SetStatusAsync("stopped");
-    await SetStatusAsync("running");
+    var before = vpn.PublicIp;
     var deadline = DateTimeOffset.UtcNow + options.RotateTimeout;
-    while (DateTimeOffset.UtcNow < deadline) {
-      await Task.Delay(options.RotatePoll);
-      var after = await PublicIpAsync();
-      if (after is null || after == before) continue;
-      logger.LogInformation("Changed public IP from {before} to {after}", before, after);
-      return true;
+    foreach (var server in await vpn.CandidatesAsync()) {
+      if (DateTimeOffset.UtcNow >= deadline) break;
+      var after = await vpn.ConnectAsync(server);
+      if (after is null) continue;
+      if (after != before) {
+        logger.LogInformation("Changed public IP from {before} to {after}", before, after);
+        return true;
+      }
+      logger.LogInformation("The VPN server {server} has the public IP we were refused on, {before}", server.Name, before);
     }
-    logger.LogWarning("Gluetun reconnected but the public IP did not change from {before}", before);
+    logger.LogWarning("No VPN server gave us a public IP other than {before}", before);
     return false;
   }
 
@@ -86,7 +58,7 @@ public sealed class Rotator(FetcherOptions options, ILogger<Rotator> logger) : I
   /// happened since, or happened too recently to try again.
   /// </summary>
   public Task<bool> RotateFromAsync(int seen) {
-    if (options.Gluetun is null) return Task.FromResult(false);
+    if (!vpn.Enabled) return Task.FromResult(false);
     lock (_state) {
       if (_generation != seen) return Task.FromResult(true);
       if (_inFlight is not null) return _inFlight;
@@ -95,6 +67,4 @@ public sealed class Rotator(FetcherOptions options, ILogger<Rotator> logger) : I
       return _inFlight = Task.Run(RotateAsync);
     }
   }
-
-  public void Dispose() => _http.Dispose();
 }

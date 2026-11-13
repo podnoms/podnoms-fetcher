@@ -18,9 +18,10 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/podnoms-fetcher.csproj" />
-    <!-- Built alongside the tests, which run them as yt-dlp and pip. -->
+    <!-- Built alongside the tests, which run them as yt-dlp, pip and the VPN helper. -->
     <ProjectReference Include="../fake-yt-dlp/fake-yt-dlp.csproj" />
     <ProjectReference Include="../fake-pip/fake-pip.csproj" />
+    <ProjectReference Include="../fake-vpn/fake-vpn.csproj" />
   </ItemGroup>
 
   <ItemGroup>

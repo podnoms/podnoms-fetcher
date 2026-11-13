@@ -93,48 +93,82 @@ public sealed class ApiTests : FetcherTest {
   }
 
   [Fact]
-  public async Task Says_so_when_refused_without_gluetun_to_change_ip() {
+  public async Task Says_so_when_refused_without_a_vpn_to_change_ip() {
     Assert.True((await JobAsync("/download", new { url = "https://video.test/rate-limited" })).EndedRateLimited());
   }
 
   [Fact]
   public async Task Changes_ip_and_tries_again() {
-    var gluetun = await WithGluetunAsync();
-    var result = await JobAsync("/download", new { url = "https://video.test/watch?refuse=10.0.0.1" });
+    var vpn = await WithVpnAsync("10.0.0.1", "10.0.0.2", "10.0.0.3");
+    var refused = Vpn.PublicIp;
+    Assert.Contains($"\"publicIp\":\"{refused}\"", await Client.GetStringAsync("/health"));
+
+    var result = await JobAsync("/download", new { url = $"https://video.test/watch?refuse={refused}" });
     Assert.Equal("m4a", result.File().Ext);
-    Assert.Equal(1, gluetun.Stops);
-    Assert.Contains("\"publicIp\":\"10.0.0.2\"", await Client.GetStringAsync("/health"));
+    Assert.Equal(1, vpn.Switches);
+    Assert.NotEqual(refused, Vpn.PublicIp);
+    Assert.Contains($"\"publicIp\":\"{Vpn.PublicIp}\"", await Client.GetStringAsync("/health"));
   }
 
   [Fact]
   public async Task Gives_up_after_its_retries() {
-    var gluetun = await WithGluetunAsync();
+    var vpn = await WithVpnAsync("10.0.0.1", "10.0.0.2", "10.0.0.3", "10.0.0.4");
     Assert.True((await JobAsync("/list", new { url = "https://video.test/rate-limited", limit = 1 })).EndedRateLimited());
-    Assert.Equal(Options.RotateRetries, gluetun.Stops);
+    Assert.Equal(Options.RotateRetries, vpn.Switches);
   }
 
   [Fact]
   public async Task Changes_ip_once_for_refusals_that_come_together() {
-    var gluetun = await WithGluetunAsync();
-    var body = new { url = "https://video.test/watch?refuse=10.0.0.1" };
+    var vpn = await WithVpnAsync("10.0.0.1", "10.0.0.2", "10.0.0.3");
+    var body = new { url = $"https://video.test/watch?refuse={Vpn.PublicIp}" };
     var results = await Task.WhenAll(Enumerable.Range(0, 3).Select(_ => JobAsync("/download", body)));
     Assert.All(results, result => Assert.Equal("m4a", result.File().Ext));
-    Assert.Equal(1, gluetun.Stops);
+    Assert.Equal(1, vpn.Switches);
   }
 
   [Fact]
   public async Task Doesnt_change_ip_again_so_soon_after_the_last_time() {
-    var gluetun = await WithGluetunAsync();
+    var vpn = await WithVpnAsync("10.0.0.1", "10.0.0.2", "10.0.0.3");
     Options.RotateMinInterval = TimeSpan.FromMinutes(1);
     Assert.True((await JobAsync("/list", new { url = "https://video.test/rate-limited", limit = 1 })).EndedRateLimited());
-    Assert.Equal(1, gluetun.Stops);
+    Assert.Equal(1, vpn.Switches);
   }
 
   [Fact]
-  public async Task Gives_up_if_gluetun_cant_be_told_to_reconnect() {
-    var gluetun = await WithGluetunAsync(apiKey: "other-key");
+  public async Task Gives_up_if_the_vpn_cant_be_moved() {
+    var vpn = await WithVpnAsync("10.0.0.1", "10.0.0.2");
+    Options.Vpn = vpn.Options with { Helper = "/bin/false" };
     Assert.True((await JobAsync("/list", new { url = "https://video.test/rate-limited", limit = 1 })).EndedRateLimited());
-    Assert.Equal(0, gluetun.Stops);
+    Assert.Equal(0, vpn.Switches);
+  }
+
+  [Fact]
+  public async Task Goes_back_to_the_servers_it_left_longest_ago_last() {
+    // Refused everywhere but on one server, which two moves must reach: the
+    // second can't go back to where it started.
+    var vpn = await WithVpnAsync("10.0.0.1", "10.0.0.2", "10.0.0.3");
+    string[] ips = ["10.0.0.1", "10.0.0.2", "10.0.0.3"];
+    var refused = string.Join(',', ips.Where(ip => ip != ips.First(other => other != Vpn.PublicIp)));
+    var result = await JobAsync("/download", new { url = $"https://video.test/watch?refuse={refused}" });
+    Assert.Equal("m4a", result.File().Ext);
+    Assert.InRange(vpn.Switches, 1, 2);
+  }
+
+  [Fact]
+  public async Task Doesnt_count_a_server_with_the_ip_it_was_refused_on() {
+    var vpn = await WithVpnAsync("10.0.0.1", "10.0.0.1");
+    Assert.True((await JobAsync("/download", new { url = "https://video.test/watch?refuse=10.0.0.1" })).EndedRateLimited());
+    Assert.Equal(1, vpn.Switches);
+  }
+
+  [Fact]
+  public async Task Passes_over_servers_that_dont_come_up() {
+    await WithVpnAsync("10.0.0.1", "192.0.2.1", "192.0.2.2", "10.0.0.2");
+    var refused = Vpn.PublicIp;
+    Assert.NotNull(refused);
+    var result = await JobAsync("/download", new { url = $"https://video.test/watch?refuse={refused}" });
+    Assert.Equal("m4a", result.File().Ext);
+    Assert.NotEqual(refused, Vpn.PublicIp);
   }
 
   [Fact]

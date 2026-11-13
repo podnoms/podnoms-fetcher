@@ -1,0 +1,154 @@
+#!/bin/sh
+# The fetcher's WireGuard tunnel and kill switch. This is the only thing in the
+# image that changes the network, and the only thing run as root: the fetcher
+# (the app user) runs it through doas, see /etc/doas.d/fetcher.conf.
+#
+#   fetcher-vpn connect KEYFILE ADDRESS DNS PUBLICKEY ENDPOINT PORT
+#
+# connects to a server, replacing the one before. The first time, it also sets
+# up the interface, the routing and the firewall, which then stay as they are:
+# changing server only swaps the peer and the one address we may send
+# WireGuard packets to, so there is never a moment without the kill switch.
+#
+#   KEYFILE    a file holding our private key
+#   ADDRESS    our address in the tunnel, e.g. 10.2.0.2/32
+#   DNS        the resolver in the tunnel, e.g. 10.2.0.1
+#   PUBLICKEY  the server's
+#   ENDPOINT   the server's ip:port
+#   PORT       the port PodNoms calls us on, the one thing let in from outside
+#
+#   fetcher-vpn down     takes all of it away again
+#
+# Everything goes through the tunnel except the WireGuard packets themselves
+# and answers to connections made to PORT. If the tunnel is down, nothing gets
+# out: there is no fallback to the host's own address.
+set -eu
+
+[ "$(id -u)" = 0 ] || exec doas "$0" "$@"
+
+IF=wg0
+# Marks WireGuard's own packets and the answers to PodNoms, which are routed
+# as if there were no tunnel. As wg-quick does it.
+MARK=51820
+TABLE=51820
+
+fail() {
+  echo "fetcher-vpn: $*" >&2
+  exit 1
+}
+
+is_ip() {
+  echo "$1" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$'
+}
+
+is_port() {
+  echo "$1" | grep -Eq '^[0-9]{1,5}$' && [ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+
+firewall() {
+  port=$1
+
+  # Out: only into the tunnel, to the server (FETCHER_SERVER, filled in by
+  # connect), and back to whoever called us on PORT.
+  iptables -N FETCHER_SERVER
+  iptables -P OUTPUT DROP
+  iptables -A OUTPUT -o lo -j ACCEPT
+  iptables -A OUTPUT -o "$IF" -j ACCEPT
+  iptables -A OUTPUT -m connmark --mark "$MARK" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -A OUTPUT -j FETCHER_SERVER
+
+  # In: answers to what we sent, and calls to PORT from outside the tunnel.
+  iptables -P INPUT DROP
+  iptables -P FORWARD DROP
+  iptables -A INPUT -i lo -j ACCEPT
+  iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+  iptables -A INPUT ! -i "$IF" -p tcp --dport "$port" -j ACCEPT
+
+  # Connections made to PORT are marked, and so are their packets either way,
+  # so our answers leave the way the call came in rather than through the tunnel.
+  iptables -t mangle -A PREROUTING ! -i "$IF" -p tcp --dport "$port" -m conntrack --ctstate NEW -j CONNMARK --set-mark "$MARK"
+  iptables -t mangle -A PREROUTING -m connmark --mark "$MARK" -j CONNMARK --restore-mark
+  iptables -t mangle -A OUTPUT -m connmark --mark "$MARK" -j CONNMARK --restore-mark
+
+  # The tunnel is IPv4 only, so no IPv6 at all. (It may be off already.)
+  ip6tables -P OUTPUT DROP 2>/dev/null || true
+  ip6tables -P INPUT DROP 2>/dev/null || true
+  ip6tables -P FORWARD DROP 2>/dev/null || true
+  ip6tables -A OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+  ip6tables -A INPUT -i lo -j ACCEPT 2>/dev/null || true
+}
+
+tunnel() {
+  # The firewall first: from here on nothing leaves but through the tunnel.
+  firewall "$1"
+  ip link add "$IF" type wireguard || fail "could not add a WireGuard interface (is NET_ADMIN granted, and does the host's kernel have WireGuard?)"
+  wg set "$IF" fwmark "$MARK"
+  ip link set mtu 1420 up dev "$IF"
+  # Needed where the host checks reverse paths strictly; set by compose's
+  # sysctls where /proc/sys can't be written.
+  sysctl -q -w net.ipv4.conf.all.src_valid_mark=1 2>/dev/null || true
+  # Everything unmarked takes the tunnel, except what main has a route for
+  # besides its default (the local network).
+  ip route add default dev "$IF" table "$TABLE"
+  ip rule add not fwmark "$MARK" table "$TABLE"
+  ip rule add table main suppress_prefixlength 0
+}
+
+connect() {
+  [ $# -eq 6 ] || fail "usage: fetcher-vpn connect KEYFILE ADDRESS DNS PUBLICKEY ENDPOINT PORT"
+  keyfile=$1 address=$2 dns=$3 publickey=$4 endpoint=$5 port=$6
+  host=${endpoint%:*}
+  hostport=${endpoint##*:}
+
+  [ -r "$keyfile" ] || fail "can't read the key file"
+  echo "$address" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}(/[0-9]{1,2})?$' || fail "not an address: $address"
+  is_ip "$dns" || fail "not a resolver's address: $dns"
+  echo "$publickey" | grep -Eq '^[A-Za-z0-9+/]{43}=$' || fail "not a WireGuard key: $publickey"
+  is_ip "$host" && is_port "$hostport" || fail "not an ip:port: $endpoint"
+  is_port "$port" || fail "not a port: $port"
+
+  ip link show "$IF" >/dev/null 2>&1 || tunnel "$port"
+
+  # The new server may be sent to before the old one is forgotten, never the
+  # other way round.
+  iptables -A FETCHER_SERVER -p udp -d "$host" --dport "$hostport" -j ACCEPT
+  wg set "$IF" private-key "$keyfile"
+  for peer in $(wg show "$IF" peers); do
+    [ "$peer" = "$publickey" ] || wg set "$IF" peer "$peer" remove
+  done
+  wg set "$IF" peer "$publickey" endpoint "$endpoint" allowed-ips 0.0.0.0/0 persistent-keepalive 25
+  while [ "$(iptables -S FETCHER_SERVER | grep -c -- '-j ACCEPT')" -gt 1 ]; do
+    iptables -D FETCHER_SERVER 1
+  done
+
+  if ! ip -4 -o addr show dev "$IF" | grep -q " ${address%/*}/"; then
+    ip -4 addr flush dev "$IF"
+    ip addr add "$address" dev "$IF"
+    ip route replace default dev "$IF" table "$TABLE"
+  fi
+
+  # Names are looked up through the tunnel, not by the host.
+  echo "nameserver $dns" > /etc/resolv.conf
+}
+
+down() {
+  ip rule del not fwmark "$MARK" table "$TABLE" 2>/dev/null || true
+  ip rule del table main suppress_prefixlength 0 2>/dev/null || true
+  ip link del "$IF" 2>/dev/null || true
+  for chain in INPUT OUTPUT FORWARD; do
+    iptables -P "$chain" ACCEPT
+    ip6tables -P "$chain" ACCEPT 2>/dev/null || true
+  done
+  iptables -F
+  iptables -t mangle -F
+  iptables -X FETCHER_SERVER 2>/dev/null || true
+  ip6tables -F 2>/dev/null || true
+}
+
+command=${1:-}
+[ $# -gt 0 ] && shift
+case "$command" in
+  connect) connect "$@" ;;
+  down) down ;;
+  *) fail "usage: fetcher-vpn connect KEYFILE ADDRESS DNS PUBLICKEY ENDPOINT PORT | down" ;;
+esac

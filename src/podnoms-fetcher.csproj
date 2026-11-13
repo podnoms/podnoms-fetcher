@@ -14,4 +14,9 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Written by scripts/update-protonvpn-servers.sh. -->
+    <EmbeddedResource Include="ProtonVpnServers.json" LogicalName="ProtonVpnServers.json" />
+  </ItemGroup>
+
 </Project>

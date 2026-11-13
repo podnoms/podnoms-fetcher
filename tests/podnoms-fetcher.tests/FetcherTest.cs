@@ -11,7 +11,7 @@ namespace PodNoms.Fetcher.Tests;
 /// </summary>
 public abstract class FetcherTest : IAsyncLifetime {
   private readonly WebApplicationFactory<Program> _app = new();
-  private FakeGluetun? _gluetun;
+  private FakeVpn? _vpn;
 
   protected FetcherOptions Options { get; }
 
@@ -25,6 +25,7 @@ public abstract class FetcherTest : IAsyncLifetime {
     Options.RotateMinInterval = TimeSpan.Zero;
     Options.RotatePoll = TimeSpan.FromMilliseconds(5);
     Options.RotateTimeout = TimeSpan.FromSeconds(2);
+    Options.VpnConnectTimeout = TimeSpan.FromMilliseconds(300);
     Anonymous = _app.CreateClient();
     Client = _app.CreateClient();
     Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", TestEnvironment.Secret);
@@ -32,11 +33,16 @@ public abstract class FetcherTest : IAsyncLifetime {
 
   protected T Service<T>() where T : notnull => _app.Services.GetRequiredService<T>();
 
-  protected async Task<FakeGluetun> WithGluetunAsync(string? apiKey = null) {
-    _gluetun = apiKey is null ? await FakeGluetun.StartAsync() : await FakeGluetun.StartAsync(apiKey);
-    Options.Gluetun = new GluetunOptions(_gluetun.Url, "gluetun-key");
-    return _gluetun;
+  /// <summary>Gives the fetcher a VPN with a server at each of these addresses, connected to one of them.</summary>
+  protected async Task<FakeVpn> WithVpnAsync(params string[] ips) {
+    _vpn = FakeVpn.WithServers(ips);
+    Options.Vpn = _vpn.Options;
+    await Vpn.StartAsync();
+    _vpn.Started();
+    return _vpn;
   }
+
+  protected Vpn Vpn => Service<Vpn>();
 
   protected Task<HttpResponseMessage> PostAsync(string path, object body) => Client.PostAsJsonAsync(path, body);
 
@@ -53,7 +59,7 @@ public abstract class FetcherTest : IAsyncLifetime {
   public Task InitializeAsync() => Task.CompletedTask;
 
   public async Task DisposeAsync() {
-    if (_gluetun is not null) await _gluetun.DisposeAsync();
+    if (_vpn is not null) await _vpn.DisposeAsync();
     await _app.DisposeAsync();
     Directory.Delete(Options.WorkDir, recursive: true);
   }

@@ -34,8 +34,8 @@ public static partial class Api {
       await context.Response.WriteAsync("Unauthorized");
     });
 
-    app.MapGet("/health", async (YtDlp ytDlp, Rotator rotator) =>
-        Results.Json(new Health(await ytDlp.VersionAsync(), await rotator.PublicIpAsync()), Json.Health));
+    app.MapGet("/health", async (YtDlp ytDlp, Vpn vpn) =>
+        Results.Json(new Health(await ytDlp.VersionAsync(), vpn.PublicIp), Json.Health));
 
     app.MapPost("/list", async (HttpContext context, Jobs jobs) => {
       using var body = await ReadBodyAsync(context);

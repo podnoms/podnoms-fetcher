@@ -39,8 +39,11 @@ COPY --from=oven/bun:1.4.1-alpine /usr/local/bin/bun /usr/local/bin/bun
 COPY --from=ffmpeg /out/usr/local /usr/local
 
 # The Python environment is owned by the app's user so it can update yt-dlp,
-# on start and every few hours.
-RUN apk add --no-cache ca-certificates libstdc++ python3 \
+# on start and every few hours. The rest is for the VPN: WireGuard's wg, ip and
+# iptables, used only by fetcher-vpn, which the app's user may run as root
+# (and nothing else) through doas.
+RUN apk add --no-cache ca-certificates doas iproute2 iptables libstdc++ python3 wireguard-tools-wg \
+    && echo 'permit nopass app as root cmd /usr/local/bin/fetcher-vpn' > /etc/doas.d/fetcher.conf \
     && python3 -m venv /opt/yt-dlp \
     && /opt/yt-dlp/bin/pip install --no-cache-dir 'yt-dlp[default]' \
     && printf '%s\n' '--js-runtimes bun' > /etc/yt-dlp.conf \
@@ -56,9 +59,8 @@ ENV PORT=8080 \
     PATH="/opt/yt-dlp/bin:${PATH}"
 
 COPY --from=build /app/podnoms-fetcher ./
-COPY --chmod=755 docker/entrypoint.sh /usr/local/bin/fetcher-entrypoint
+COPY --chmod=755 docker/fetcher-vpn /usr/local/bin/fetcher-vpn
 
 USER app
 EXPOSE 8080
-ENTRYPOINT ["fetcher-entrypoint"]
-CMD ["/app/podnoms-fetcher"]
+ENTRYPOINT ["/app/podnoms-fetcher"]
